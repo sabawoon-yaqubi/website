@@ -15,6 +15,13 @@ export default function OrderSuccessPage() {
   const sessionId = searchParams.get('session_id')
 
   useEffect(() => {
+    // Clear basket immediately when order success page loads (for online payments)
+    // This ensures the cart is cleared even if order details fail to load
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('basketItems')
+      window.dispatchEvent(new Event('basketCleared'))
+    }
+
     if (!sessionId) {
       setError("No session ID found")
       setLoading(false)
@@ -30,11 +37,6 @@ export default function OrderSuccessPage() {
       setLoading(true)
       const orderData = await getOrderBySession(sessionId!)
       setOrder(orderData)
-      // Clear basket after successful order
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem('basketItems')
-        window.dispatchEvent(new Event('basketCleared'))
-      }
     } catch (err: any) {
       setError(err.message || "Failed to load order details. Please check your orders page.")
     } finally {
