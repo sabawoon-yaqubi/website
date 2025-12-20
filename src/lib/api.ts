@@ -3,7 +3,7 @@
 
 // ==================== API URL Configuration ====================
 // EASY SWITCH: Set to true to use local development server, false for production
-const USE_LOCAL_API = true; // Change this to false for production
+const USE_LOCAL_API = false; // Change this to false for production
 
 // Local development API URL
 const LOCAL_API_URL = 'http://127.0.0.1:8000/api';
