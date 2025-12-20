@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Calendar, Clock, CreditCard, MapPin, Phone, ShoppingBag, User, ChevronRight, Info, ArrowLeft, Bike } from "lucide-react"
-import { placeOrder, getCurrentUser, updateProfile, createCheckoutSession, validateUserSession, isAuthenticated, getFees, calculateFees, type PlaceOrderData, type FeesData } from "@/lib/api"
+import { placeOrder, getCurrentUser, updateProfile, createCheckoutSession, validateUserSession, isAuthenticated, getFees, calculateFees, getSettings, getActiveDiscounts, calculateDiscount, type PlaceOrderData, type FeesData, type SettingsData, type DiscountData } from "@/lib/api"
 import Header from "@/components/header"
 import MyAccountModal from "@/components/my-account-modal"
 
@@ -18,7 +18,11 @@ export default function CheckoutPage() {
   const [deliveryFee, setDeliveryFee] = useState(0)
   const [serviceFee, setServiceFee] = useState(0.99)
   const [total, setTotal] = useState(0)
+  const [discountAmount, setDiscountAmount] = useState(0)
+  const [appliedDiscount, setAppliedDiscount] = useState<DiscountData | null>(null)
   const [feesData, setFeesData] = useState<FeesData | null>(null)
+  const [settingsData, setSettingsData] = useState<SettingsData | null>(null)
+  const [discountsData, setDiscountsData] = useState<DiscountData[]>([])
   // Initialize with default value to avoid hydration mismatch
   const [deliveryType, setDeliveryType] = useState<"delivery" | "collection">("delivery")
   
@@ -37,17 +41,23 @@ export default function CheckoutPage() {
   const [showOrderNotes, setShowOrderNotes] = useState(false)
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false)
 
-  // Fetch fees data on mount
+  // Fetch fees, settings, and discounts data on mount
   useEffect(() => {
-    const fetchFees = async () => {
+    const fetchData = async () => {
       try {
-        const fees = await getFees()
+        const [fees, settings, discounts] = await Promise.all([
+          getFees(),
+          getSettings(),
+          getActiveDiscounts(),
+        ])
         setFeesData(fees)
+        setSettingsData(settings)
+        setDiscountsData(discounts)
       } catch (error) {
-        console.error('Failed to fetch fees:', error)
+        console.error('Failed to fetch data:', error)
       }
     }
-    fetchFees()
+    fetchData()
   }, [])
 
   // Check authentication status on mount
@@ -115,13 +125,68 @@ export default function CheckoutPage() {
     }
   }, [router])
 
-  // Update totals when delivery type, subtotal, or fees data changes
+  // Calculate discount when subtotal, date, or discounts change
   useEffect(() => {
-    const calculated = calculateFees(feesData, subtotal, deliveryType)
+    if (discountsData.length > 0 && subtotal > 0) {
+      let dayOfWeek: string
+      
+      // If date is selected, use it; otherwise use today's date
+      if (selectedDate) {
+        try {
+          const datePart = selectedDate.split(" - ")[0].trim()
+          // Handle both DD/MM and DD.MM formats
+          const dateStr = datePart.replace(/\./g, '/')
+          const parts = dateStr.split('/')
+          
+          if (parts.length === 2) {
+            const day = parseInt(parts[0], 10)
+            const month = parseInt(parts[1], 10)
+            const currentYear = new Date().getFullYear()
+            
+            // Create date object (month is 0-indexed in JavaScript Date)
+            const dateObj = new Date(currentYear, month - 1, day)
+            
+            if (!isNaN(dateObj.getTime()) && dateObj.getDate() === day && dateObj.getMonth() === month - 1) {
+              dayOfWeek = dateObj.toLocaleDateString('en-US', { weekday: 'long' })
+            } else {
+              // Fallback to today if parsing fails
+              dayOfWeek = new Date().toLocaleDateString('en-US', { weekday: 'long' })
+            }
+          } else {
+            // Fallback to today if format is wrong
+            dayOfWeek = new Date().toLocaleDateString('en-US', { weekday: 'long' })
+          }
+        } catch (error) {
+          console.error('Error parsing date for discount:', error)
+          // Fallback to today if parsing fails
+          dayOfWeek = new Date().toLocaleDateString('en-US', { weekday: 'long' })
+        }
+      } else {
+        // Use today's date if no date selected yet
+        dayOfWeek = new Date().toLocaleDateString('en-US', { weekday: 'long' })
+      }
+      
+      const discountResult = calculateDiscount(
+        discountsData,
+        subtotal,
+        dayOfWeek
+      )
+      
+      setDiscountAmount(discountResult.discountAmount)
+      setAppliedDiscount(discountResult.discount)
+    } else {
+      setDiscountAmount(0)
+      setAppliedDiscount(null)
+    }
+  }, [subtotal, selectedDate, discountsData])
+
+  // Update totals when delivery type, subtotal, fees data, or discount changes
+  useEffect(() => {
+    const calculated = calculateFees(feesData, subtotal, deliveryType, discountAmount)
     setDeliveryFee(calculated.deliveryFee)
     setServiceFee(calculated.serviceFee)
     setTotal(calculated.total)
-  }, [deliveryType, subtotal, feesData])
+  }, [deliveryType, subtotal, feesData, discountAmount])
 
 
   // Initialize form data
@@ -129,7 +194,8 @@ export default function CheckoutPage() {
     if (user) {
       const today = new Date()
       const dateStr = today.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit" })
-      setSelectedDate(`${dateStr} - Today`)
+      const initialDate = `${dateStr} - Today`
+      setSelectedDate(initialDate)
       
       const defaultTime = new Date(today.getTime() + 60 * 60 * 1000)
       const minutes = Math.ceil(defaultTime.getMinutes() / 15) * 15
@@ -313,6 +379,20 @@ export default function CheckoutPage() {
       return
     }
 
+    // Validate minimum order value (only for delivery)
+    if (deliveryType === "delivery") {
+      const minOrderValue = feesData?.min_order 
+        ? parseFloat(String(feesData.min_order)) 
+        : (settingsData?.min_order_value || 10.0)
+      
+      if (minOrderValue > 0 && subtotal < minOrderValue) {
+        setError(`Minimum order value for delivery is €${minOrderValue.toFixed(2)}. Your order total is €${subtotal.toFixed(2)}. Please add €${(minOrderValue - subtotal).toFixed(2)} more to proceed.`)
+        setIsSubmitting(false)
+        return
+      }
+    }
+
+
     // For delivery, address is required
     if (deliveryType === "delivery" && (!address || !address.trim())) {
       setError("Delivery address is required. Please enter your delivery address.")
@@ -397,6 +477,7 @@ export default function CheckoutPage() {
 
       const orderData: PlaceOrderData = {
         total_price: total,
+        subtotal: subtotal,
         customer: user.id,
         description: fullDescription,
         phone_number: phoneNumber.trim(),
@@ -409,6 +490,7 @@ export default function CheckoutPage() {
         time: selectedTime,
         delivery_type: deliveryType,
         order_items: orderItems,
+        discount: discountAmount,
       }
 
 
@@ -782,11 +864,11 @@ export default function CheckoutPage() {
 
           {/* Right Column - Order Summary */}
           <div className="w-full lg:w-96 bg-card rounded-xl p-4 sm:p-5 flex flex-col h-fit lg:sticky lg:top-20 border border-border shadow-lg order-first lg:order-last">
-            <h3 className="text-base sm:text-lg font-semibold text-foreground mb-3">Order summary</h3>
-            
-            {/* Restaurant Name */}
-            <div className="flex items-center gap-1.5 mb-3">
-              <span className="text-foreground font-medium text-sm sm:text-base">Oscar's Pizza & Kebab</span>
+            <div className="mb-4 pb-3 border-b border-border">
+              <h3 className="text-lg sm:text-xl font-bold text-foreground mb-1">Order Summary</h3>
+              <div className="flex items-center gap-1.5">
+                <span className="text-muted-foreground text-sm">Oscar's Pizza & Kebab</span>
+              </div>
             </div>
 
             {/* Items */}
@@ -835,37 +917,78 @@ export default function CheckoutPage() {
             </div>
 
             {/* Price Breakdown */}
-            <div className="space-y-1.5 mb-3 pb-3 border-b border-border">
-              <div className="flex justify-between text-xs sm:text-sm">
+            <div className="space-y-2 mb-3 pb-3 border-b border-border">
+              <div className="flex justify-between items-center text-sm">
                 <span className="text-muted-foreground">Subtotal</span>
-                <span className="text-foreground">€ {subtotal.toFixed(2)}</span>
+                <span className="text-foreground font-medium">€ {subtotal.toFixed(2)}</span>
               </div>
+              
+              {discountAmount > 0 && appliedDiscount && (
+                <div className="bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-lg p-2.5">
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-green-700 dark:text-green-400 font-semibold text-sm flex items-center gap-1.5">
+                      <span className="text-base">🎉</span>
+                      {appliedDiscount.name || 'Discount Applied'}
+                    </span>
+                    <span className="text-green-700 dark:text-green-400 font-bold text-sm">
+                      -€ {discountAmount.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="text-xs text-green-600 dark:text-green-500">
+                    {appliedDiscount.discount_type === 'percentage' 
+                      ? `${typeof appliedDiscount.discount_value === 'number' ? appliedDiscount.discount_value : parseFloat(String(appliedDiscount.discount_value)) || 0}% off`
+                      : `€${(typeof appliedDiscount.discount_value === 'number' ? appliedDiscount.discount_value : parseFloat(String(appliedDiscount.discount_value)) || 0).toFixed(2)} off`
+                    }
+                  </div>
+                </div>
+              )}
+              
               {deliveryType === "delivery" && (
-                <div className="flex justify-between text-xs sm:text-sm">
+                <div className="flex justify-between items-center text-sm">
                   <span className="text-muted-foreground flex items-center gap-1">
-                    Delivery fee <Info className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
+                    Delivery fee <Info className="w-3 h-3" />
                     {deliveryFee === 0 && feesData && subtotal >= parseFloat(feesData.free_delivery_limit) && (
-                      <span className="text-green-500 text-xs">(Free!)</span>
+                      <span className="text-green-500 text-xs font-medium">(Free!)</span>
                     )}
                   </span>
-                  <span className="text-foreground">
+                  <span className="text-foreground font-medium">
                     {deliveryFee === 0 ? "Free" : `€ ${deliveryFee.toFixed(2)}`}
                   </span>
                 </div>
               )}
-              <div className="flex justify-between text-xs sm:text-sm">
+              
+              <div className="flex justify-between items-center text-sm">
                 <span className="text-muted-foreground flex items-center gap-1">
-                  Service fee <Info className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
+                  Service fee <Info className="w-3 h-3" />
                 </span>
-                <span className="text-foreground">€ {serviceFee.toFixed(2)}</span>
+                <span className="text-foreground font-medium">€ {serviceFee.toFixed(2)}</span>
               </div>
             </div>
 
             {/* Total */}
-            <div className="flex justify-between mb-4">
-              <span className="text-foreground font-bold text-base sm:text-lg">Total</span>
-              <span className="text-foreground font-bold text-base sm:text-lg">€ {total.toFixed(2)}</span>
+            <div className="flex justify-between items-center mb-4 pt-2 border-t-2 border-orange-500/20">
+              <span className="text-foreground font-bold text-lg sm:text-xl">Total</span>
+              <span className="text-foreground font-bold text-lg sm:text-xl text-orange-500">
+                € {total.toFixed(2)}
+              </span>
             </div>
+            
+            {discountAmount > 0 && (
+              <div className="mb-4 p-2 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded-lg">
+                <p className="text-xs text-orange-700 dark:text-orange-400 text-center">
+                  💰 You're saving €{discountAmount.toFixed(2)} with this discount!
+                </p>
+              </div>
+            )}
+
+            {/* Minimum Order Warning */}
+            {settingsData && settingsData.min_order_value > 0 && subtotal < settingsData.min_order_value && (
+              <div className="bg-yellow-500/10 border border-yellow-500 rounded-lg p-2 mb-3">
+                <p className="text-yellow-600 dark:text-yellow-400 text-xs">
+                  Minimum order value: €{settingsData.min_order_value.toFixed(2)}
+                </p>
+              </div>
+            )}
 
             {/* Payment Method */}
             <div className="mb-4">

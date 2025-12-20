@@ -12,9 +12,11 @@ import MobileBasket from "@/components/mobile-basket"
 import ProductModal from "@/components/product-modal"
 import MyAccountModal from "@/components/my-account-modal"
 import CategoriesModal from "@/components/categories-modal"
-import { getMenuCategories, getAllMenuItems, getPopularMenuItems, searchMenuItems, type Menu, type MenuItem } from "@/lib/api"
+import { getMenuCategories, getAllMenuItems, getPopularMenuItems, searchMenuItems, getFees, type Menu, type MenuItem, type FeesData } from "@/lib/api"
 import HighlightsCarousel from "@/components/highlights-carousel"
 import { getImageUrl } from "@/lib/image-utils"
+import DownloadAppSection from "@/components/download-app-section"
+import DiscountBanner from "@/components/discount-banner"
 
 // Helper function to get today's date string in Ireland timezone
 const getIrelandDateString = (): string => {
@@ -81,6 +83,7 @@ export default function RestaurantMenu() {
   const [isRestaurantClosedModalOpen, setIsRestaurantClosedModalOpen] = useState(false)
   const [headerHeight, setHeaderHeight] = useState(64)
   const [stickySearchHeight, setStickySearchHeight] = useState(0)
+  const [feesData, setFeesData] = useState<FeesData | null>(null)
 
   const sectionRefs = useRef<{ [key: string]: HTMLDivElement | null }>({})
   const heroRef = useRef<HTMLDivElement>(null)
@@ -278,6 +281,19 @@ export default function RestaurantMenu() {
     }
 
     checkRestaurantStatus()
+  }, [])
+
+  // Fetch fees data on mount
+  useEffect(() => {
+    const fetchFees = async () => {
+      try {
+        const fees = await getFees()
+        setFeesData(fees)
+      } catch (error) {
+        console.error('Failed to fetch fees:', error)
+      }
+    }
+    fetchFees()
   }, [])
 
   // Fetch menu categories, all menu items, and popular items for highlights
@@ -558,6 +574,16 @@ export default function RestaurantMenu() {
     setBasketItems((prev) => prev.filter((_, i) => i !== index))
   }
 
+  // Get delivery price dynamically
+  const deliveryPrice = feesData?.delivery_price 
+    ? parseFloat(feesData.delivery_price).toFixed(2) 
+    : '3.00'
+
+  // Get minimum order value dynamically
+  const minOrderValue = feesData?.min_order 
+    ? parseFloat(String(feesData.min_order)).toFixed(2) 
+    : '10.00'
+
   return (
     <div className="min-h-screen bg-background transition-colors duration-300">
       <div ref={headerRef} className="sticky top-0 z-50 bg-background">
@@ -570,6 +596,12 @@ export default function RestaurantMenu() {
             <HeroSection />
           </div>
           
+          {/* Discount Banner */}
+          <DiscountBanner />
+          
+          {/* Download App Section */}
+          <DownloadAppSection />
+          
           <div className="px-4 md:px-6 lg:px-16 xl:px-24">
 
           {/* Restaurant Info */}
@@ -581,12 +613,12 @@ export default function RestaurantMenu() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <div className="flex items-center gap-1">
                       <ShoppingBag className="w-3.5 h-3.5 text-foreground" />
-                      <span className="text-foreground text-sm">Min. € 10.00</span>
+                      <span className="text-foreground text-sm">Min. € {minOrderValue}</span>
                     </div>
                     <span className="text-muted-foreground">•</span>
                     <div className="flex items-center gap-1">
                       <Bike className="w-3.5 h-3.5 text-foreground" />
-                      <span className="text-foreground text-sm">€ 3.00</span>
+                      <span className="text-foreground text-sm">€ {deliveryPrice}</span>
                     </div>
                   </div>
                 </div>
@@ -1000,11 +1032,11 @@ export default function RestaurantMenu() {
                       <div className="space-y-3">
                         <div className="flex justify-between items-center py-2 border-b border-border">
                           <span className="text-muted-foreground text-sm">Minimum order amount</span>
-                          <span className="text-orange-500 text-base font-bold">€ 10.00</span>
+                          <span className="text-orange-500 text-base font-bold">€ {minOrderValue}</span>
                         </div>
                         <div className="flex justify-between items-center py-2">
                           <span className="text-muted-foreground text-sm">Delivery fee</span>
-                          <span className="text-orange-500 text-base font-bold">€ 3.00</span>
+                          <span className="text-orange-500 text-base font-bold">€ {deliveryPrice}</span>
                         </div>
                       </div>
                     </div>

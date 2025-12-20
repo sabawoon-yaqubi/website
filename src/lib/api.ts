@@ -1,7 +1,23 @@
 // API service for Laravel backend with improved security, error handling, and functionality
 // Ensure API_BASE_URL is always an absolute URL and never uses location.host
+
+// ==================== API URL Configuration ====================
+// EASY SWITCH: Set to true to use local development server, false for production
+const USE_LOCAL_API = true; // Change this to false for production
+
+// Local development API URL
+const LOCAL_API_URL = 'http://127.0.0.1:8000/api';
+
+// Production API URL
+const PRODUCTION_API_URL = 'https://order.oscarlimerick.com/api';
+
 function getApiBaseUrl(): string {
-  // Get from environment variable (set at build time)
+  // Priority 1: Use local API if USE_LOCAL_API is true
+  if (USE_LOCAL_API) {
+    return LOCAL_API_URL;
+  }
+  
+  // Priority 2: Get from environment variable (set at build time)
   const envUrl = process.env.NEXT_PUBLIC_API_URL;
   
   // If environment variable is set and is an absolute URL, use it
@@ -14,8 +30,8 @@ function getApiBaseUrl(): string {
     return url;
   }
   
-  // Fallback to production API URL (never use location.host)
-  return 'https://order.oscarlimerick.com/api';
+  // Priority 3: Fallback to production API URL (never use location.host)
+  return PRODUCTION_API_URL;
 }
 
 const API_BASE_URL = getApiBaseUrl();
@@ -126,6 +142,8 @@ export interface PlaceOrderData {
   payment_details?: {
     paymentIntentId?: string;
   };
+  discount?: number;
+  subtotal?: number;
 }
 
 export interface PlaceOrderResponse {
@@ -1033,6 +1051,7 @@ export interface FeesData {
   free_delivery_limit: string;
   service_fees: string;
   discount_for_all: string | null;
+  min_order?: string | number;
   created_at: string;
   updated_at: string;
 }
@@ -1054,6 +1073,7 @@ export async function getFees(): Promise<FeesData | null> {
       free_delivery_limit: '12.00',
       service_fees: '0.99',
       discount_for_all: null,
+      min_order: '10.00',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -1064,8 +1084,9 @@ export async function getFees(): Promise<FeesData | null> {
 export function calculateFees(
   fees: FeesData | null,
   subtotal: number,
-  deliveryType: 'delivery' | 'collection'
-): { deliveryFee: number; serviceFee: number; total: number } {
+  deliveryType: 'delivery' | 'collection',
+  discountAmount: number = 0
+): { deliveryFee: number; serviceFee: number; discountAmount: number; total: number } {
   const defaultFees: FeesData = {
     id: 1,
     delivery_price: '1.00',
@@ -1088,9 +1109,98 @@ export function calculateFees(
     deliveryFee = subtotal >= freeDeliveryLimit ? 0 : deliveryPrice;
   }
   
-  const total = subtotal + deliveryFee + serviceFee;
+  // Calculate total: subtotal + deliveryFee + serviceFee - discountAmount
+  const total = Math.max(0, subtotal + deliveryFee + serviceFee - discountAmount);
   
-  return { deliveryFee, serviceFee, total };
+  return { deliveryFee, serviceFee, discountAmount, total };
+}
+
+// ==================== Settings ====================
+
+export interface SettingsData {
+  min_order_value: number;
+}
+
+// Fetch settings from API
+export async function getSettings(): Promise<SettingsData | null> {
+  try {
+    const data = await apiRequest<{ success: boolean; data?: SettingsData }>('/settings');
+    
+    if (data.success && data.data) {
+      return data.data;
+    }
+    return null;
+  } catch (error) {
+    // Return default settings if API fails
+    return {
+      min_order_value: 0,
+    };
+  }
+}
+
+// ==================== Discounts ====================
+
+export interface DiscountData {
+  id: number;
+  name: string;
+  discount_type: 'percentage' | 'fixed';
+  discount_value: number;
+  days_of_week: string[] | null;
+}
+
+// Fetch active discounts from API
+export async function getActiveDiscounts(): Promise<DiscountData[]> {
+  try {
+    const data = await apiRequest<{ success: boolean; data?: DiscountData[] }>('/discounts');
+    
+    if (data.success && data.data) {
+      return data.data;
+    }
+    return [];
+  } catch (error) {
+    return [];
+  }
+}
+
+// Calculate applicable discount for an order
+export function calculateDiscount(
+  discounts: DiscountData[],
+  subtotal: number,
+  dayOfWeek: string
+): { discount: DiscountData | null; discountAmount: number } {
+  const currentDay = dayOfWeek.toLowerCase();
+
+  let bestDiscount: DiscountData | null = null;
+  let maxDiscountAmount = 0;
+
+  for (const discount of discounts) {
+    // Check day of week - if no days specified, applies to all days
+    if (discount.days_of_week && discount.days_of_week.length > 0) {
+      const days = discount.days_of_week.map(d => d.toLowerCase());
+      if (!days.includes(currentDay)) {
+        continue;
+      }
+    }
+
+    // Calculate discount amount
+    let discountAmount = 0;
+    if (discount.discount_type === 'percentage') {
+      discountAmount = (subtotal * discount.discount_value) / 100;
+    } else {
+      discountAmount = Math.min(discount.discount_value, subtotal);
+    }
+
+    // Keep the best discount
+    if (discountAmount > maxDiscountAmount) {
+      maxDiscountAmount = discountAmount;
+      bestDiscount = discount;
+    }
+  }
+
+  return {
+    discount: bestDiscount,
+    discountAmount: maxDiscountAmount,
+  };
 }
 
 // ==================== Drinks/Addons ====================

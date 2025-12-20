@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { X, ShoppingCart, Trash2, Minus, Plus, Bike, ShoppingBag, Info } from "lucide-react"
-import { getFees, calculateFees, type FeesData } from "@/lib/api"
+import { getFees, calculateFees, getActiveDiscounts, calculateDiscount, type FeesData, type DiscountData } from "@/lib/api"
 
 interface SelectedOption {
   groupTitle: string
@@ -40,18 +40,25 @@ export default function MobileBasket({ items, onUpdateQuantity, onRemoveItem, on
   // Initialize with default value to avoid hydration mismatch
   const [deliveryMode, setDeliveryMode] = useState<"delivery" | "collection">("delivery")
   const [feesData, setFeesData] = useState<FeesData | null>(null)
+  const [discountsData, setDiscountsData] = useState<DiscountData[]>([])
+  const [discountAmount, setDiscountAmount] = useState(0)
+  const [appliedDiscount, setAppliedDiscount] = useState<DiscountData | null>(null)
 
-  // Fetch fees data on mount
+  // Fetch fees and discounts data on mount
   useEffect(() => {
-    const fetchFees = async () => {
+    const fetchData = async () => {
       try {
-        const fees = await getFees()
+        const [fees, discounts] = await Promise.all([
+          getFees(),
+          getActiveDiscounts()
+        ])
         setFeesData(fees)
+        setDiscountsData(discounts)
       } catch (error) {
-        console.error('Failed to fetch fees:', error)
+        console.error('Failed to fetch data:', error)
       }
     }
-    fetchFees()
+    fetchData()
   }, [])
 
   // Sync with localStorage changes (e.g., when coming back from checkout)
@@ -111,13 +118,53 @@ export default function MobileBasket({ items, onUpdateQuantity, onRemoveItem, on
   }, [])
 
   const subtotal = items.reduce((sum, item) => sum + item.totalPrice, 0)
-  const { deliveryFee, serviceFee, total } = calculateFees(feesData, subtotal, deliveryMode)
+
+  // Calculate discount based on today's day of week
+  useEffect(() => {
+    if (discountsData.length > 0 && subtotal > 0) {
+      const now = new Date()
+      const dayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' })
+      
+      const discountResult = calculateDiscount(
+        discountsData,
+        subtotal,
+        dayOfWeek
+      )
+      
+      setDiscountAmount(discountResult.discountAmount)
+      setAppliedDiscount(discountResult.discount)
+    } else {
+      setDiscountAmount(0)
+      setAppliedDiscount(null)
+    }
+  }, [subtotal, discountsData])
+
+  const { deliveryFee, serviceFee, total } = calculateFees(feesData, subtotal, deliveryMode, discountAmount)
   const itemCount = items.reduce((sum, item) => sum + item.quantity, 0)
   
   // Get free delivery limit with fallback
   const freeDeliveryLimit = feesData ? parseFloat(feesData.free_delivery_limit) : 12.0
   const qualifiesForFreeDelivery = subtotal >= freeDeliveryLimit
   const amountNeeded = Math.max(0, freeDeliveryLimit - subtotal)
+
+  // Get minimum order value
+  const minOrderValue = feesData?.min_order 
+    ? parseFloat(String(feesData.min_order)) 
+    : 10.0
+  
+  // Check if order meets minimum requirement (only for delivery)
+  const meetsMinimumOrder = deliveryMode === "collection" || subtotal >= minOrderValue
+  const minOrderAmountNeeded = deliveryMode === "delivery" ? Math.max(0, minOrderValue - subtotal) : 0
+
+  const handleCheckout = () => {
+    // Validate minimum order for delivery
+    if (deliveryMode === "delivery" && subtotal < minOrderValue) {
+      alert(`Minimum order value for delivery is €${minOrderValue.toFixed(2)}. Your order total is €${subtotal.toFixed(2)}. Please add €${minOrderAmountNeeded.toFixed(2)} more to proceed.`)
+      return
+    }
+    setIsOpen(false)
+    router.push('/checkout')
+  }
 
   if (items.length === 0) return null
 
@@ -307,6 +354,20 @@ export default function MobileBasket({ items, onUpdateQuantity, onRemoveItem, on
                   <span className="text-muted-foreground">Subtotal</span>
                   <span className="text-foreground">€ {subtotal.toFixed(2)}</span>
                 </div>
+                {discountAmount > 0 && appliedDiscount && (
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-green-600 dark:text-green-400 flex items-center gap-1">
+                      Discount {appliedDiscount.name && `(${appliedDiscount.name})`}
+                      {appliedDiscount.discount_type === 'percentage' 
+                        ? ` (${typeof appliedDiscount.discount_value === 'number' ? appliedDiscount.discount_value : parseFloat(String(appliedDiscount.discount_value)) || 0}%)`
+                        : ` (€${(typeof appliedDiscount.discount_value === 'number' ? appliedDiscount.discount_value : parseFloat(String(appliedDiscount.discount_value)) || 0).toFixed(2)})`
+                      }
+                    </span>
+                    <span className="text-green-600 dark:text-green-400 font-medium">
+                      -€ {discountAmount.toFixed(2)}
+                    </span>
+                  </div>
+                )}
                 {deliveryMode === "delivery" && (
                   <div className="flex justify-between items-center text-sm">
                     <span className="text-muted-foreground flex items-center gap-1">
@@ -331,13 +392,25 @@ export default function MobileBasket({ items, onUpdateQuantity, onRemoveItem, on
                   <span className="text-foreground font-bold text-lg">€ {total.toFixed(2)}</span>
                 </div>
               </div>
+              {/* Minimum Order Warning */}
+              {deliveryMode === "delivery" && !meetsMinimumOrder && (
+                <div className="px-4 pb-3">
+                  <div className="px-3 py-2 rounded-lg text-xs border border-orange-500/50 bg-orange-500/10">
+                    <p className="text-orange-500 font-medium">
+                      Minimum order for delivery is €{minOrderValue.toFixed(2)}. Add €{minOrderAmountNeeded.toFixed(2)} more to checkout.
+                    </p>
+                  </div>
+                </div>
+              )}
               <div className="px-4 pb-6">
                 <button 
-                  onClick={() => {
-                    setIsOpen(false)
-                    router.push('/checkout')
-                  }}
-                  className="w-full bg-orange-500 text-white font-bold py-4 rounded-full hover:bg-orange-600 transition text-lg active:bg-orange-700 dark:bg-orange-600"
+                  onClick={handleCheckout}
+                  disabled={!meetsMinimumOrder && deliveryMode === "delivery"}
+                  className={`w-full font-bold py-4 rounded-full transition text-lg ${
+                    (!meetsMinimumOrder && deliveryMode === "delivery")
+                      ? "bg-muted text-muted-foreground cursor-not-allowed"
+                      : "bg-orange-500 text-white hover:bg-orange-600 active:bg-orange-700 dark:bg-orange-600"
+                  }`}
                 >
                   Checkout (€ {total.toFixed(2)})
                 </button>

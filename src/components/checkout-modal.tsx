@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { X, Calendar, Clock, CreditCard, DollarSign, MapPin, Phone, FileText, ShoppingBag, Tag, User, ChevronRight, Info } from "lucide-react"
-import { placeOrder, getCurrentUser, updateProfile, createCheckoutSession, getFees, calculateFees, type PlaceOrderData, type FeesData } from "@/lib/api"
+import { placeOrder, getCurrentUser, updateProfile, createCheckoutSession, getFees, calculateFees, getSettings, getActiveDiscounts, calculateDiscount, type PlaceOrderData, type FeesData, type SettingsData, type DiscountData } from "@/lib/api"
 import { useRouter } from "next/navigation"
 
 interface BasketItem {
@@ -54,6 +54,10 @@ export default function CheckoutModal({
   const router = useRouter()
   const user = getCurrentUser()
   const [feesData, setFeesData] = useState<FeesData | null>(null)
+  const [settingsData, setSettingsData] = useState<SettingsData | null>(null)
+  const [discountsData, setDiscountsData] = useState<DiscountData[]>([])
+  const [discountAmount, setDiscountAmount] = useState(0)
+  const [appliedDiscount, setAppliedDiscount] = useState<DiscountData | null>(null)
   
   const [selectedDate, setSelectedDate] = useState("")
   const [selectedTime, setSelectedTime] = useState("")
@@ -72,21 +76,48 @@ export default function CheckoutModal({
   const [error, setError] = useState("")
   const [showItems, setShowItems] = useState(false)
 
-  // Fetch fees data on mount
+  // Fetch fees, settings, and discounts data on mount
   useEffect(() => {
-    const fetchFees = async () => {
+    const fetchData = async () => {
       try {
-        const fees = await getFees()
+        const [fees, settings, discounts] = await Promise.all([
+          getFees(),
+          getSettings(),
+          getActiveDiscounts(),
+        ])
         setFeesData(fees)
+        setSettingsData(settings)
+        setDiscountsData(discounts)
       } catch (error) {
-        console.error('Failed to fetch fees:', error)
+        console.error('Failed to fetch data:', error)
       }
     }
-    fetchFees()
+    fetchData()
   }, [])
 
+  // Calculate discount when subtotal, date, time, or discounts change
+  useEffect(() => {
+    if (selectedDate && selectedTime && discountsData.length > 0 && propSubtotal > 0) {
+      const datePart = selectedDate.split(" - ")[0]
+      const dateObj = new Date(datePart.split('/').reverse().join('-'))
+      const dayOfWeek = dateObj.toLocaleDateString('en-US', { weekday: 'long' })
+      
+      const discountResult = calculateDiscount(
+        discountsData,
+        propSubtotal,
+        dayOfWeek
+      )
+      
+      setDiscountAmount(discountResult.discountAmount)
+      setAppliedDiscount(discountResult.discount)
+    } else {
+      setDiscountAmount(0)
+      setAppliedDiscount(null)
+    }
+  }, [propSubtotal, selectedDate, selectedTime, discountsData])
+
   // Calculate fees dynamically
-  const { deliveryFee, serviceFee, total } = calculateFees(feesData, propSubtotal, deliveryType)
+  const { deliveryFee, serviceFee, total } = calculateFees(feesData, propSubtotal, deliveryType, discountAmount)
 
   // Initialize form data
   useEffect(() => {
@@ -205,6 +236,14 @@ export default function CheckoutModal({
       setError("Please select delivery date and time")
       return
     }
+
+    // Validate minimum order value
+    if (settingsData && settingsData.min_order_value > 0 && propSubtotal < settingsData.min_order_value) {
+      setError(`Minimum order value is €${settingsData.min_order_value.toFixed(2)}. Your order total is €${propSubtotal.toFixed(2)}.`)
+      setIsSubmitting(false)
+      return
+    }
+
 
     if (deliveryType === "delivery" && !address) {
       setError("Delivery address is required")
@@ -682,6 +721,20 @@ export default function CheckoutModal({
                 <span className="text-muted-foreground">Subtotal</span>
                 <span className="text-foreground">€ {propSubtotal.toFixed(2)}</span>
               </div>
+              {discountAmount > 0 && appliedDiscount && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-green-600 dark:text-green-400 flex items-center gap-1">
+                    Discount {appliedDiscount.name && `(${appliedDiscount.name})`}
+                    {appliedDiscount.discount_type === 'percentage' 
+                      ? ` (${typeof appliedDiscount.discount_value === 'number' ? appliedDiscount.discount_value : parseFloat(String(appliedDiscount.discount_value)) || 0}%)`
+                      : ` (€${(typeof appliedDiscount.discount_value === 'number' ? appliedDiscount.discount_value : parseFloat(String(appliedDiscount.discount_value)) || 0).toFixed(2)})`
+                    }
+                  </span>
+                  <span className="text-green-600 dark:text-green-400 font-medium">
+                    -€ {discountAmount.toFixed(2)}
+                  </span>
+                </div>
+              )}
               {deliveryType === "delivery" && (
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground flex items-center gap-1">
@@ -708,6 +761,15 @@ export default function CheckoutModal({
               <span className="text-foreground font-bold text-lg">Total</span>
               <span className="text-foreground font-bold text-lg">€ {total.toFixed(2)}</span>
             </div>
+
+            {/* Minimum Order Warning */}
+            {settingsData && settingsData.min_order_value > 0 && propSubtotal < settingsData.min_order_value && (
+              <div className="bg-yellow-500/10 border border-yellow-500 rounded-lg p-2 mb-4">
+                <p className="text-yellow-600 dark:text-yellow-400 text-xs">
+                  Minimum order value: €{settingsData.min_order_value.toFixed(2)}
+                </p>
+              </div>
+            )}
 
             {/* Submit Button */}
             <button
