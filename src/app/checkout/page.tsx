@@ -218,8 +218,29 @@ export default function CheckoutPage() {
         // Use saved address from previous checkout
         setAddress(savedAddress)
       }
+    } else {
+      // If no user, try to load from localStorage
+      if (typeof window !== 'undefined') {
+        const savedAddress = localStorage.getItem('user_address') || ""
+        if (savedAddress) {
+          setAddress(savedAddress)
+        }
+      }
     }
   }, [user])
+
+  // Load address from localStorage when switching to delivery type
+  useEffect(() => {
+    if (deliveryType === "delivery" && typeof window !== 'undefined') {
+      const savedAddress = localStorage.getItem('user_address') || ""
+      if (savedAddress) {
+        setAddress(prevAddress => {
+          // Only update if current address is empty
+          return prevAddress && prevAddress.trim() !== "" ? prevAddress : savedAddress
+        })
+      }
+    }
+  }, [deliveryType])
 
   // Generate time slots
   const generateTimeSlots = (): string[] => {
@@ -368,8 +389,9 @@ export default function CheckoutPage() {
       return
     }
 
-    if (!areaCode || areaCode.trim() === "") {
-      setError("Area code is required")
+    // Area code is only required for delivery
+    if (deliveryType === "delivery" && (!areaCode || areaCode.trim() === "")) {
+      setError("Area code is required for delivery")
       setIsEditingAreaCode(true)
       return
     }
@@ -453,8 +475,9 @@ export default function CheckoutPage() {
         return
       }
 
-      if (!areaCode || areaCode.trim() === "") {
-        setError("Area code is required")
+      // Area code is only required for delivery
+      if (deliveryType === "delivery" && (!areaCode || areaCode.trim() === "")) {
+        setError("Area code is required for delivery")
         setIsEditingAreaCode(true)
         setIsSubmitting(false)
         return
@@ -482,7 +505,7 @@ export default function CheckoutPage() {
         description: fullDescription,
         phone_number: phoneNumber.trim(),
         payment_method: paymentMethod === "cash" ? "cash" : "online",
-        area_code: areaCode.trim(),
+        area_code: deliveryType === "delivery" ? areaCode.trim() : "",
         houseadress: deliveryType === "delivery" ? address.trim() : "",
         longitude: "0",
         latitude: "0",
@@ -505,11 +528,57 @@ export default function CheckoutPage() {
           total,
         })
         
+        // Save address to user profile if delivery and address is provided (before redirecting to payment)
+        if (deliveryType === "delivery" && address && address.trim()) {
+          try {
+            await updateProfile(user.id, {
+              name: user.name,
+              email: user.email,
+              phone_number: phoneNumber || user.phone_number || "",
+              area_code: areaCode || (user as any).area_code || "",
+              address: address.trim(),
+              latitude: (user as any).latitude || "",
+              longitude: (user as any).longitude || "",
+            })
+            // Update local user state
+            const currentUser = getCurrentUser()
+            if (currentUser) {
+              setUser(currentUser)
+            }
+          } catch (err) {
+            // Don't fail the order if profile update fails, just log it
+            console.error('Failed to save address to profile:', err)
+          }
+        }
+
         if (sessionData.url) {
           window.location.href = sessionData.url
           return
         } else {
           throw new Error("Failed to create payment session")
+        }
+      }
+
+      // Save address to user profile if delivery and address is provided
+      if (deliveryType === "delivery" && address && address.trim()) {
+        try {
+          await updateProfile(user.id, {
+            name: user.name,
+            email: user.email,
+            phone_number: phoneNumber || user.phone_number || "",
+            area_code: areaCode || (user as any).area_code || "",
+            address: address.trim(),
+            latitude: (user as any).latitude || "",
+            longitude: (user as any).longitude || "",
+          })
+          // Update local user state
+          const currentUser = getCurrentUser()
+          if (currentUser) {
+            setUser(currentUser)
+          }
+        } catch (err) {
+          // Don't fail the order if profile update fails, just log it
+          console.error('Failed to save address to profile:', err)
         }
       }
 
@@ -713,7 +782,8 @@ export default function CheckoutPage() {
                 )}
               </div>
 
-              {/* Area Code */}
+              {/* Area Code - Only for delivery */}
+              {deliveryType === "delivery" && (
               <div className="bg-muted/50 rounded-lg p-3 sm:p-3.5 mb-2 border border-border">
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="flex items-center gap-1.5 flex-wrap">
@@ -755,6 +825,7 @@ export default function CheckoutPage() {
                   <p className="text-muted-foreground text-xs sm:text-sm break-words">{areaCode || "Not set - Click to add"}</p>
                 )}
               </div>
+              )}
 
               {/* House Address */}
               {deliveryType === "delivery" && (
@@ -770,7 +841,13 @@ export default function CheckoutPage() {
                   </div>
                   <textarea
                     value={address}
-                    onChange={(e) => setAddress(e.target.value)}
+                    onChange={(e) => {
+                      setAddress(e.target.value)
+                      // Save to localStorage as user types
+                      if (e.target.value.trim()) {
+                        localStorage.setItem('user_address', e.target.value.trim())
+                      }
+                    }}
                     placeholder="Enter your house address (street, building number, apartment/unit, etc.)"
                     rows={3}
                     className="w-full mt-1.5 px-3 py-2.5 sm:py-2 bg-background text-foreground rounded-lg border border-border focus:outline-none focus:border-orange-500 resize-none text-sm sm:text-base"
@@ -981,11 +1058,11 @@ export default function CheckoutPage() {
               </div>
             )}
 
-            {/* Minimum Order Warning */}
-            {settingsData && settingsData.min_order_value > 0 && subtotal < settingsData.min_order_value && (
+            {/* Minimum Order Warning - Only for delivery */}
+            {deliveryType === "delivery" && settingsData && settingsData.min_order_value > 0 && subtotal < settingsData.min_order_value && (
               <div className="bg-yellow-500/10 border border-yellow-500 rounded-lg p-2 mb-3">
                 <p className="text-yellow-600 dark:text-yellow-400 text-xs">
-                  Minimum order value: €{settingsData.min_order_value.toFixed(2)}
+                  Minimum order value: €{parseFloat(String(settingsData.min_order_value)).toFixed(2)}
                 </p>
               </div>
             )}

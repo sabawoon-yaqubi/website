@@ -237,9 +237,10 @@ export default function CheckoutModal({
       return
     }
 
-    // Validate minimum order value
-    if (settingsData && settingsData.min_order_value > 0 && propSubtotal < settingsData.min_order_value) {
-      setError(`Minimum order value is €${settingsData.min_order_value.toFixed(2)}. Your order total is €${propSubtotal.toFixed(2)}.`)
+    // Validate minimum order value (only for delivery)
+    if (deliveryType === "delivery" && settingsData && settingsData.min_order_value > 0 && propSubtotal < settingsData.min_order_value) {
+      const minOrderValue = parseFloat(String(settingsData.min_order_value))
+      setError(`Minimum order value is €${minOrderValue.toFixed(2)}. Your order total is €${propSubtotal.toFixed(2)}.`)
       setIsSubmitting(false)
       return
     }
@@ -762,11 +763,11 @@ export default function CheckoutModal({
               <span className="text-foreground font-bold text-lg">€ {total.toFixed(2)}</span>
             </div>
 
-            {/* Minimum Order Warning */}
-            {settingsData && settingsData.min_order_value > 0 && propSubtotal < settingsData.min_order_value && (
+            {/* Minimum Order Warning - Only for delivery */}
+            {deliveryType === "delivery" && settingsData && settingsData.min_order_value > 0 && propSubtotal < settingsData.min_order_value && (
               <div className="bg-yellow-500/10 border border-yellow-500 rounded-lg p-2 mb-4">
                 <p className="text-yellow-600 dark:text-yellow-400 text-xs">
-                  Minimum order value: €{settingsData.min_order_value.toFixed(2)}
+                  Minimum order value: €{parseFloat(String(settingsData.min_order_value)).toFixed(2)}
                 </p>
               </div>
             )}
